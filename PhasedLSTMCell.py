@@ -188,6 +188,7 @@ class PhasedLSTMCell(RNNCell):
 
         self.manual_set = manual_set
         self.trainable = trainable
+        self._reuse = None
 
         if num_proj:
             self._state_size = (
@@ -207,6 +208,35 @@ class PhasedLSTMCell(RNNCell):
     @property
     def output_size(self):
         return self._output_size
+
+    def set_period_variable(self,value,scope=None,session=None):
+        assert session is not None
+        assert scope is not None
+        self.tau_init = value
+        self.r_on_init = self.tau_init/10
+        with vs.variable_scope(scope or type(self).__name__,reuse=self._reuse):
+            tau = vs.get_variable("T", shape=[self._num_units],
+                initializer=init_ops.constant_initializer(self.tau_init),
+                trainable=False,dtype=tf.float32)
+            r_on = vs.get_variable(
+                "R", shape=[self._num_units],
+                initializer=init_ops.constant_initializer(self.tau_init/10),
+                trainable=self.trainable, dtype=tf.float32)
+            s = vs.get_variable(
+                "S", shape=[self._num_units],
+                initializer=init_ops.constant_initializer(0.),
+                trainable=self.trainable,dtype=tf.float32)
+            self._reuse = True
+            tau.assign(tf.constant([value] * self._num_units)).eval(session=session)
+
+    def get_period_variable(self,scope=None,session=None):
+        assert session is not None
+        assert scope is not None
+        with vs.variable_scope(scope or type(self).__name__,reuse=self._reuse):
+
+            tau = vs.get_variable("T")
+        print(tau.eval(session=session))
+        return tau
 
     def __call__(self, inputs, state, scope=None):
         """Run one step of LSTM.
@@ -246,7 +276,7 @@ class PhasedLSTMCell(RNNCell):
         if input_size.value is None:
             raise ValueError("Could not infer input size from inputs.get_shape()[-1]")
         with vs.variable_scope(scope or type(self).__name__,
-                               initializer=self._initializer):  # "LSTMCell"
+                               initializer=self._initializer,reuse=self._reuse):  # "LSTMCell"
             i_size = input_size.value - 1  # -1 to extract time
             times = array_ops.slice(inputs, [0, i_size], [-1, 1])
             filtered_inputs = array_ops.slice(inputs, [0, 0], [-1, i_size])
@@ -270,6 +300,7 @@ class PhasedLSTMCell(RNNCell):
                 "S", shape=[self._num_units],
                 initializer=init_ops.random_uniform_initializer(0., tau.initialized_value()) if not self.manual_set else init_ops.constant_initializer(0.),
                 trainable=self.trainable,dtype=dtype)
+            self._reuse = True
                 # for backward compatibility (v < 0.12.0) use the following line instead of the above
                 # initializer = init_ops.random_uniform_initializer(0., tau), dtype = dtype)
 
@@ -299,6 +330,8 @@ class PhasedLSTMCell(RNNCell):
             # ----------------- END ----------------- #
             # --------------------------------------- #
 
+        with vs.variable_scope(scope or type(self).__name__,
+                           initializer=self._initializer):  # "LSTMCell"
             concat_w = _get_concat_variable(
                 "W", [i_size + num_proj, 4 * self._num_units],
                 dtype, self._num_unit_shards)
@@ -356,6 +389,7 @@ class PhasedLSTMCell(RNNCell):
 
         new_state = (LSTMStateTuple(c, m) if self._state_is_tuple
                      else array_ops.concat(1, [c, m]))
+
         return m, new_state
 
 
