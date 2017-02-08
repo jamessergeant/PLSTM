@@ -44,3 +44,4 @@ fabric.properties
 .idea
 
 *.pyc
+phasedLSTM_run/
