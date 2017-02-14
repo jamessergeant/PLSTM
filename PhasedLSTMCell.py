@@ -17,7 +17,8 @@ from tensorflow.python.ops.rnn_cell import RNNCell, LSTMStateTuple
 from tensorflow.python.platform import tf_logging as logging
 from tensorflow.python.framework import dtypes
 from tensorflow.python.ops import random_ops
-
+from tensorflow.python.util import nest
+from tensorflow.python.ops.rnn_cell import _state_size_with_prefix
 
 def random_exp_initializer(minval=0, maxval=None, seed=None,
                                dtype=dtypes.float32):
@@ -49,6 +50,7 @@ def _mod_grad(op, grad):
     gz = grad
     x_grad = gz
     y_grad = tf.reduce_mean(-(x // y) * gz, reduction_indices=[0], keep_dims=True)
+    # y_grad = -(x // y) * gz
     return x_grad, y_grad
 
 
@@ -466,7 +468,7 @@ class ModPLSTMCell(RNNCell):
                  initializer=None, num_proj=None, proj_clip=None,
                  num_unit_shards=1, num_proj_shards=1,
                  forget_bias=1.0, state_is_tuple=True,
-                 activation=tanh, alpha=0.001, r_on_init=0.05, tau_init=6.):
+                 activation=tanh, alpha=0.001, r_on_init=0.5, tau_init=1.):
         """Initialize the parameters for an PLSTM cell.
 
         Args:
@@ -512,6 +514,7 @@ class ModPLSTMCell(RNNCell):
                          "deprecated.  Use state_is_tuple=True.", self)
         if input_size is not None:
             logging.warn("%s: The input_size parameter is deprecated.", self)
+
         self._num_units = num_units
         self._use_peepholes = use_peepholes
         self._cell_clip = cell_clip
@@ -597,23 +600,40 @@ class ModPLSTMCell(RNNCell):
             w_m = vs.get_variable(
                 "W_m", shape=[i_size + num_proj, 3 * self._num_units],
                 initializer=init_ops.random_uniform_initializer(-0.01, 0.01), dtype=dtype)
-                # _get_concat_variable(
-                #         "W_m", [i_size + num_proj, 3 * self._num_units],
-                #         dtype, self._num_unit_shards)
-            # w_m = tf.Print(w_m,[tf.shape(w_m)],'w_m: ')
 
             b_m = vs.get_variable(
                 "B_m", shape=[3 * self._num_units],
-                initializer=init_ops.constant_initializer(0.01), dtype=dtype)
+                initializer=init_ops.constant_initializer(-0.01), dtype=dtype)
             # b_m = tf.Print(b_m,[tf.shape(b_m)],'b_m: ')
 
             cell_inputs = array_ops.concat(1, [filtered_inputs, m_prev])
             # cell_inputs = tf.Print(cell_inputs,[tf.shape(cell_inputs)],'cell_inputs: ')
 
-            m_matrix = nn_ops.bias_add(math_ops.matmul(cell_inputs, w_m), b_m)
+            m_matrix = sigmoid(nn_ops.bias_add(math_ops.matmul(cell_inputs, w_m), b_m))
             # m_matrix = tf.Print(m_matrix,[tf.shape(m_matrix)],'m_matrix: ')
+            tau = vs.get_variable(
+                "T", shape=[self._num_units],
+                initializer=init_ops.random_uniform_initializer(0, self.tau_init),dtype=dtype)
 
-            tau_broadcast, r_on_broadcast, s_broadcast = array_ops.split(1, 3, m_matrix)
+            r_on = vs.get_variable(
+                "R", shape=[self._num_units],
+                initializer=init_ops.constant_initializer(self.r_on_init),dtype=dtype)
+
+            s = vs.get_variable(
+                "S", shape=[self._num_units],
+                initializer=init_ops.random_uniform_initializer(0., tau.initialized_value()),dtype=dtype)
+
+            tau_mod, r_on_mod, s_mod = array_ops.split(1, 3, m_matrix)
+            # tau_mod = tf.Print(tau_mod,[tf.shape(tau_mod)])
+            # r_on_mod = tf.Print(r_on_mod,[tf.shape(r_on_mod)])
+            # s_mod = tf.Print(s_mod,[tf.shape(s_mod)])
+
+            tau_broadcast = tf.multiply(tau, tau_mod)
+            # tau_broadcast = tf.Print(tau_broadcast,[tf.shape(tau_broadcast)])
+            r_on_broadcast = tf.multiply(r_on, r_on_mod)
+            # r_on_broadcast = tf.Print(r_on_broadcast,[tf.shape(r_on_broadcast)])
+            s_broadcast = tf.multiply(s, s_mod)
+            # s_broadcast = tf.Print(s_broadcast,[tf.shape(s_broadcast)])
 
             # tau_broadcast = tf.reduce_sum(tau_broadcast,axis=1)
             # r_on_broadcast = tf.reduce_sum(r_on_broadcast,axis=1)
