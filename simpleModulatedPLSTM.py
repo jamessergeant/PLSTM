@@ -301,7 +301,7 @@ def main(_):
     # Let's define the training and testing operations
     print ("Compiling RNN...",)
     initial_states = [None for _ in range(FLAGS.n_layers)]
-    predictions = RNN(xA,xB, t, weights, biases, lens, initial_states)
+    predictions = RNN([xA,xB,t], weights, biases, lens, initial_states, [FLAGS.])
     print ("DONE!")
 
     # Register initial_states to be monitored by tensorboard

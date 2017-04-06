@@ -303,8 +303,6 @@ class PhasedLSTMCell(RNNCell):
                 initializer=init_ops.random_uniform_initializer(0., tau.initialized_value()) if not self.manual_set else init_ops.constant_initializer(0.),
                 trainable=self.trainable,dtype=dtype)
             self._reuse = True
-                # for backward compatibility (v < 0.12.0) use the following line instead of the above
-                # initializer = init_ops.random_uniform_initializer(0., tau), dtype = dtype)
 
             tau_broadcast = tf.expand_dims(tau, dim=0)
             r_on_broadcast = tf.expand_dims(r_on, dim=0)
@@ -322,7 +320,9 @@ class PhasedLSTMCell(RNNCell):
 
             # when manually setting, hard on over r_on, else as previous
             if self.manual_set:
-                k = tf.select(tf.logical_or(is_up,is_down), tf.to_float(is_up), self.alpha * phi)
+                # some tweaking still required here
+                k = tf.select(tf.logical_or(tf.less(tf.abs(phi),0.001),tf.greater(phi,0.999)), tf.ones(tf.shape(phi)), self.alpha * phi)
+                k = tf.where(tf.equal(times, 0),tf.zeros(tf.shape(k)),k)
             else:
                 k = tf.select(is_up, phi / (r_on_broadcast * 0.5),
                               tf.select(is_down, 2. - 2. * (phi / r_on_broadcast), self.alpha * phi))
@@ -334,13 +334,17 @@ class PhasedLSTMCell(RNNCell):
 
         with vs.variable_scope(scope or type(self).__name__,
                            initializer=self._initializer):  # "LSTMCell"
-            concat_w = _get_concat_variable(
-                "W", [i_size + num_proj, 4 * self._num_units],
-                dtype, self._num_unit_shards)
+            # concat_w = _get_concat_variable(
+            #     "W", [i_size + num_proj, 4 * self._num_units],
+            #     dtype, self._num_unit_shards)
+
+            concat_w = vs.get_variable(
+                "W", shape=[i_size + num_proj, 4 * self._num_units],
+                initializer=init_ops.random_uniform_initializer(-0.1,0.1), dtype=dtype)
 
             b = vs.get_variable(
                 "B", shape=[4 * self._num_units],
-                initializer=init_ops.zeros_initializer, dtype=dtype)
+                initializer=init_ops.constant_initializer(-0.1), dtype=dtype)
 
             # i = input_gate, j = new_input, f = forget_gate, o = output_gate
             cell_inputs = array_ops.concat(1, [filtered_inputs, m_prev])
